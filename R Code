@@ -1,0 +1,109 @@
+# Getting Data from Metacritic #
+
+library(rvest)
+library(dplyr)
+
+#Function to extract the last n characters in a string x (to get the console)
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+#Function to Get Console Maker
+conmaker.fun <- function(x){
+  if(x=='3DS' | x=='GBA' | x=='GC' | x=='N64' | x=='Switch' | x=='WII' | x=='WIIU' | x=='DS'){
+    conmaker <- 'Nintendo'
+  }else if(x == 'DC'){
+    conmaker <- 'SEGA'
+  }else if(x == 'PC'){
+    conmaker <- 'PC'
+  }else if(x == 'PS' | x=='PS2' | x=='PS3' | x=='PS4' | x=='VITA' | x=='PSP'){
+    conmaker <- 'SONY'
+  }else if(x == 'X360' | x=='XBOX' | x=='XONE'){
+    conmaker <- 'Microsoft'
+  }
+  return(conmaker)
+}
+
+#Function that webscrapes the game title, metacritic score, user rating, console, and release date
+gamescrape.fun <- function(x) {
+  webpage <- read_html(x)
+  
+  ## Metacritic Scores
+  metascores <- as.numeric(webpage %>% html_nodes('.brief_metascore') %>% html_text())
+  
+  ## User Rating
+  userscores <- as.numeric(webpage %>% html_nodes('#main .textscore') %>% html_text())
+  
+  ## Titles and Console
+  titles.temp <- webpage %>% html_nodes('#main .product_title') %>% html_text() #temporary titles with whitespace, \n, and console
+  titles <- gsub("\n.*", "", trimws(titles.temp, which="both")) #final title vector (removing whitespace and everything after \n)
+  consoles <- gsub("[[:punct:]]", "", gsub(" ", "", substrRight(gsub("\n", "", trimws(titles.temp, which="both")), 10))) #extracting the console and removing parentheses
+  
+  ## Console Makers
+  conmakers <- do.call('rbind', lapply(consoles, FUN=conmaker.fun))
+  
+  ## Release Date (Year-Month-Day)
+  release <- as.Date(webpage %>% html_nodes('.full_release_date .data') %>% html_text(), format="%b %d, %Y")
+  
+  ## Putting together what we got from Metacritic
+  metadata <- data.frame(titles, metascores, userscores, consoles, conmakers, release)
+  setNames(metadata, c('Game', 'Metacritic Score', 'User Rating', 'Console', 'Console Maker', 'Release Date'))
+}
+
+# This is the list of pages to scrape
+  # NOTE: Metacritic frequently updates their list of games, so double check if you include the last page of games here -----.
+  #                                                                                                                          |
+  #                                                                                                                          V
+links <- paste('https://www.metacritic.com/browse/games/score/metascore/all/all/filtered?view=condensed&sort=desc&page=', 0:169, sep='')
+
+# Initialize a list to put all the data into
+d <- vector("list", length(links))
+
+
+#### Running the Code ####
+# Sometimes (pretty rarely), the link doesn't work (I think it was a 403 error, but I might be wrong)
+# This code scrapes the data, shows scraping progress, and retries links up to 5 times if an error occurs 
+  # (each period after the "..." represents an additional try)
+
+#### NOTE: This will probably take a while, depending on your internet connection. 
+      # Each page takes about 20-25 seconds for me, which adds up to about an hour
+
+for (i in seq_along(links)) {
+  if (!(links[i] %in% names(d))) {
+    cat(paste("Doing", links[i], "..."))
+    ok <- FALSE
+    counter <- 0
+    while (ok == FALSE & counter <= 5) {
+      counter <- counter + 1
+      out <- tryCatch({                  
+        gamescrape.fun(links[i])
+      },
+      error = function(e) {
+        Sys.sleep(2)
+        e
+      }
+      )
+      if ("error" %in% class(out)) {
+        cat(".")
+      } else {
+        ok <- TRUE
+        cat(" Done.")
+      }
+    }
+    cat("\n")
+    d[[i]] <- out
+    names(d)[i] <- links[i]
+  }
+}
+
+data <- bind_rows(d)
+# The warnings are due to the Console Maker and Console being factors, and there are different numbers of factor levels, so R converts them to characters
+  # you can check this out by comparing the number of factor levels between dataframes in str(d)
+  # To solve this, just change them back to factors in the "data" dataframe
+
+data$Console <- as.factor(data$Console)
+data$`Console Maker` <- as.factor(data$`Console Maker`)
+
+
+# Since this takes a while, I recommend saving "data" as a csv on your computer with the following code
+write.csv(data, 'filepath/metacritic_data.csv') #replace "filepath" with your own file path
